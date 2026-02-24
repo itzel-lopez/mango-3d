@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Dark rounded square -->
+  <rect width="32" height="32" rx="7" fill="#0A0A0D"/>
+  <defs>
+    <!-- Mexican mango: deep crimson shoulder → orange → golden yellow face -->
+    <linearGradient id="mg-f" x1="0.8" y1="0.05" x2="0.2" y2="0.95">
+      <stop offset="0%"   stop-color="#B71C1C"/>
+      <stop offset="38%"  stop-color="#E64A19"/>
+      <stop offset="72%"  stop-color="#FF8F00"/>
+      <stop offset="100%" stop-color="#FFD600"/>
+    </linearGradient>
+  </defs>
+  <!-- Elongated mango body — clearly not round -->
+  <path d="M16 7C20 7 23 11 23 17C23 23 20 27 16 27C12 27 9 23 9 17C9 11 12 7 16 7Z" fill="url(#mg-f)"/>
+  <!-- Soft sheen on the golden face side -->
+  <ellipse cx="13" cy="15" rx="2.5" ry="4" fill="white" opacity="0.14"/>
+  <!-- Stem -->
+  <path d="M16 7C16 5.5 17.2 4.5 19 5.1" stroke="#2D7A3A" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+  <!-- Leaf — elongated and prominent, reads distinctly as mango -->
+  <path d="M16 7C14.8 4.5 11 2 8.5 3.2C9.8 5.8 12.8 6.8 16 7Z" fill="#2D7A3A"/>
+  <!-- Leaf midrib -->
+  <path d="M15.5 6.8C13 5 10.5 3.5 8.5 3.2" stroke="#1B5E20" stroke-width="0.6" stroke-linecap="round" fill="none"/>
+</svg>

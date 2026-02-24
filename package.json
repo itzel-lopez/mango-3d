@@ -1,0 +1,22 @@
+{
+  "name": "3d-modeling-experience",
+  "version": "1.0.0",
+  "description": "Browser-based 3D Studio Maker built with Three.js",
+  "scripts": {
+    "start": "live-server --port=3000 --open=index.html",
+    "dev": "vite"
+  },
+  "devDependencies": {
+    "live-server": "^1.2.2",
+    "vite": "^7.3.1"
+  },
+  "dependencies": {
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.4",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "three-bvh-csg": "^0.0.18",
+    "three-mesh-bvh": "^0.9.8"
+  }
+}
