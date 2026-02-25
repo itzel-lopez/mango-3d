@@ -5,9 +5,11 @@
   "scripts": {
     "start": "live-server --port=3000 --open=index.html",
     "dev": "vite",
-    "build": "vite build"
+    "build": "vite build",
+    "deploy": "vite build && gh-pages -d dist"
   },
   "devDependencies": {
+    "gh-pages": "^6.3.0",
     "live-server": "^1.2.2",
     "vite": "^7.3.1"
   },
