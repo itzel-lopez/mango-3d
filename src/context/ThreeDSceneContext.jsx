@@ -14,7 +14,8 @@ export const ThreeDSceneProvider = ({ children }) => {
             secondary: scene.secondary,
             hovered: scene.hovered,
             currentMode: scene.currentMode,
-            lockedGroup: scene.lockedGroup,
+            groups: scene.groups,
+            ungroup: scene.ungroup,
             placementMode: scene.placementMode,
             undoStack: scene.undoStack,
             preDragState: scene.preDragState,
@@ -28,6 +29,7 @@ export const ThreeDSceneProvider = ({ children }) => {
             clearSecondaryObject: scene.clearSecondaryObject,
             groundShape: scene.groundShape,
             lockGroup: scene.lockGroup,
+            lockObjects: scene.lockObjects,
             unlockAll: scene.unlockAll,
             saveState: scene.saveState,
             restoreState: scene.restoreState,
@@ -38,6 +40,10 @@ export const ThreeDSceneProvider = ({ children }) => {
             duplicateShape: scene.duplicateShape,
             setCameraView: scene.setCameraView,
             updateShapeRadius: scene.updateShapeRadius,
+            renameShape: scene.renameShape,
+            renameGroup: scene.renameGroup,
+            loadTemplate: scene.loadTemplate,
+            addTemplate: scene.addTemplate,
             canvasRef: canvasRef // The ref created in this provider
         }}>
             {children}

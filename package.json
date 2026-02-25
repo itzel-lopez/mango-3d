@@ -4,7 +4,8 @@
   "description": "Browser-based 3D Studio Maker built with Three.js",
   "scripts": {
     "start": "live-server --port=3000 --open=index.html",
-    "dev": "vite"
+    "dev": "vite",
+    "build": "vite build"
   },
   "devDependencies": {
     "live-server": "^1.2.2",

@@ -24,7 +24,7 @@ const useThreeDScene = (canvasRef) => {
     const [secondary, setSecondary] = useState(null);
     const [hovered, setHovered] = useState(null);
     const [currentMode, setCurrentMode] = useState('translate');
-    const [lockedGroup, setLockedGroup] = useState(new Set());
+    const [groups, setGroups] = useState([]);
     const [placementMode, setPlacementMode] = useState(null);
     const [undoStack, setUndoStack] = useState([]);
     const [preDragState, setPreDragState] = useState(null);
@@ -55,7 +55,7 @@ const useThreeDScene = (canvasRef) => {
         secondary: null,
         hovered: null,
         currentMode: 'translate',
-        lockedGroup: new Set(),
+        groups: [],
         placementMode: null,
         preDragState: null,
         undoStack: []
@@ -164,6 +164,7 @@ const useThreeDScene = (canvasRef) => {
         setObjects(newObjects);
         setSelected(null);
         setSecondary(null);
+        setGroups([]);
         transformControls.current.detach();
     }, [createMesh, removeOutline, setObjects, setSelected, setSecondary]);
 
@@ -251,7 +252,7 @@ const useThreeDScene = (canvasRef) => {
     // --- Outliner Logic ---
     const updateOutliner = useCallback(() => {
         // This logic will be handled in the UI component by mapping over the 'objects' state.
-        // The hook provides the 'objects', 'selected', 'secondary', 'lockedGroup' states and related functions.
+        // The hook provides the 'objects', 'selected', 'secondary', 'groups' states and related functions.
     }, []);
 
     // --- Core Three.js Setup and Effects ---
@@ -294,17 +295,18 @@ const useThreeDScene = (canvasRef) => {
         grid.position.y = 0.01;
         scene.current.add(grid);
 
-        // Brighter center axis lines — clearly mark the 4 quadrants
-        const axisMat = new THREE.LineBasicMaterial({ color: 0x484858 });
+        // Center axis lines — red = X, blue = Z (matches transform gizmo convention)
         const axisX = new THREE.Line(
             new THREE.BufferGeometry().setFromPoints([
                 new THREE.Vector3(-25, 0, 0), new THREE.Vector3(25, 0, 0)
-            ]), axisMat
+            ]),
+            new THREE.LineBasicMaterial({ color: 0x0A84FF, opacity: 0.55, transparent: true })
         );
         const axisZ = new THREE.Line(
             new THREE.BufferGeometry().setFromPoints([
                 new THREE.Vector3(0, 0, -25), new THREE.Vector3(0, 0, 25)
-            ]), axisMat
+            ]),
+            new THREE.LineBasicMaterial({ color: 0x0A84FF, opacity: 0.55, transparent: true })
         );
         axisX.position.y = 0.02;
         axisZ.position.y = 0.02;
@@ -313,6 +315,7 @@ const useThreeDScene = (canvasRef) => {
         // Orbit Controls
         orbitControls.current = new OrbitControls(camera.current, renderer.current.domElement);
         orbitControls.current.enableDamping = true;
+        orbitControls.current.zoomToCursor = true;
 
         // Transform Controls
         transformControls.current = new TransformControls(camera.current, renderer.current.domElement);
@@ -389,10 +392,17 @@ const useThreeDScene = (canvasRef) => {
     // --- State Management Functions ---
 
     const selectObject = useCallback((obj) => {
-        // Always clean up secondary outline — setSecondary(null) alone doesn't do this
+        // Always clean up secondary outline
         removeOutline(objectState.current.secondary);
+
+        // Remove outlines from all members of the previously selected object's group
+        const prevGroup = objectState.current.groups.find(g => g.members.has(selected));
+        if (prevGroup && selected !== obj) {
+            prevGroup.members.forEach(m => removeOutline(m));
+        }
+
         if (!obj) {
-            removeOutline(selected);
+            if (!prevGroup) removeOutline(selected); // ungrouped single object
             setHoverEmissive(selected, false);
             setSelected(null);
             setSecondary(null);
@@ -400,14 +410,20 @@ const useThreeDScene = (canvasRef) => {
             return;
         }
         if (selected !== obj) {
-            removeOutline(selected);
+            if (!prevGroup) removeOutline(selected);
             setHoverEmissive(selected, false);
         }
         setSelected(obj);
         setSecondary(null);
         if (transformControls.current) transformControls.current.attach(obj);
-        const outlineColor = objectState.current.lockedGroup.has(obj) ? 0xFFB800 : 0xffffff;
-        addOutline(obj, outlineColor);
+
+        // Outline the entire group, or just the single object
+        const activeGroup = objectState.current.groups.find(g => g.members.has(obj));
+        if (activeGroup) {
+            activeGroup.members.forEach(m => addOutline(m, 0xFFB800));
+        } else {
+            addOutline(obj, 0xffffff);
+        }
         setHoverEmissive(obj, false);
         saveState();
     }, [selected, removeOutline, setHoverEmissive, addOutline, saveState]);
@@ -433,14 +449,18 @@ const useThreeDScene = (canvasRef) => {
         if (!selected) return;
         scene.current.remove(selected);
         setObjects(prev => prev.filter(obj => obj !== selected));
+        setGroups(prev => prev
+            .map(g => { const m = new Set(g.members); m.delete(selected); return { ...g, members: m }; })
+            .filter(g => g.members.size >= 2)
+        );
         deselectObject();
         saveState();
     }, [selected, setObjects, deselectObject, saveState]);
 
     const groundShape = useCallback(() => {
         if (!selected) return;
-        const group = objectState.current.lockedGroup;
-        const toGround = group.has(selected) ? [...group] : [selected];
+        const activeGroup = objectState.current.groups.find(g => g.members.has(selected));
+        const toGround = activeGroup ? [...activeGroup.members] : [selected];
 
         // Find the lowest point across all objects in the group
         let lowestMinY = Infinity;
@@ -461,24 +481,69 @@ const useThreeDScene = (canvasRef) => {
 
     const lockGroupAction = useCallback(() => {
         if (!selected || !secondary) return;
-        setLockedGroup(prev => {
-            const newGroup = new Set(prev);
-            newGroup.add(selected);
-            newGroup.add(secondary);
-            return newGroup;
-        });
-        // Immediately show the locked (gold) outline on the selected shape
-        addOutline(selected, 0xFFB800);
+        const existingGroup = objectState.current.groups.find(
+            g => g.members.has(selected) || g.members.has(secondary)
+        );
+        if (existingGroup) {
+            setGroups(prev => prev.map(g => {
+                if (g.id !== existingGroup.id) return g;
+                const newMembers = new Set(g.members);
+                newMembers.add(selected);
+                newMembers.add(secondary);
+                return { ...g, members: newMembers };
+            }));
+        } else {
+            const newGroup = {
+                id: THREE.MathUtils.generateUUID(),
+                name: `Group ${objectState.current.groups.length + 1}`,
+                members: new Set([selected, secondary])
+            };
+            setGroups(prev => [...prev, newGroup]);
+        }
+        // Outline all members of the group (existing or new)
+        const updatedGroup = objectState.current.groups.find(
+            g => g.members.has(selected) || g.members.has(secondary)
+        );
+        if (updatedGroup) updatedGroup.members.forEach(m => addOutline(m, 0xFFB800));
+        else { addOutline(selected, 0xFFB800); addOutline(secondary, 0xFFB800); }
         saveState();
     }, [selected, secondary, addOutline, saveState]);
 
-    const unlockAllAction = useCallback(() => {
-        setLockedGroup(new Set());
-        setPreDragState(null);
-        // Revert selected shape's outline back to single-selection white
-        if (objectState.current.selected) addOutline(objectState.current.selected, 0xffffff);
+    const lockObjects = useCallback((objs) => {
+        if (!objs || objs.length < 2) return;
+        const newGroup = {
+            id: THREE.MathUtils.generateUUID(),
+            name: `Group ${objectState.current.groups.length + 1}`,
+            members: new Set(objs)
+        };
+        setGroups(prev => [...prev, newGroup]);
+        objs.forEach(o => addOutline(o, 0xFFB800));
         saveState();
     }, [addOutline, saveState]);
+
+    const unlockAllAction = useCallback(() => {
+        // Remove group outlines from every grouped member
+        objectState.current.groups.forEach(g => g.members.forEach(m => removeOutline(m)));
+        setGroups([]);
+        setPreDragState(null);
+        if (objectState.current.selected) addOutline(objectState.current.selected, 0xffffff);
+        saveState();
+    }, [addOutline, removeOutline, saveState]);
+
+    const ungroup = useCallback((groupId) => {
+        // Remove outlines from all members of the disbanded group
+        const target = objectState.current.groups.find(g => g.id === groupId);
+        if (target) target.members.forEach(m => removeOutline(m));
+        setGroups(prev => prev.filter(g => g.id !== groupId));
+        const sel = objectState.current.selected;
+        if (sel) {
+            const stillInGroup = objectState.current.groups
+                .filter(g => g.id !== groupId)
+                .some(g => g.members.has(sel));
+            addOutline(sel, stillInGroup ? 0xFFB800 : 0xffffff);
+        }
+        saveState();
+    }, [addOutline, removeOutline, saveState]);
 
     const duplicateShape = useCallback(() => {
         const src = objectState.current.selected;
@@ -511,6 +576,17 @@ const useThreeDScene = (canvasRef) => {
         saveState();
     }, [buildGeo, selectObject, saveState]);
 
+    const renameShape = useCallback((obj, name) => {
+        if (!obj || !name.trim()) return;
+        obj.userData.name = name.trim();
+        setObjects(prev => [...prev]); // trigger re-render so outliner + panel update
+    }, []);
+
+    const renameGroup = useCallback((groupId, name) => {
+        if (!groupId || !name.trim()) return;
+        setGroups(prev => prev.map(g => g.id === groupId ? { ...g, name: name.trim() } : g));
+    }, []);
+
     const setCameraView = useCallback((view) => {
         if (!camera.current || !orbitControls.current) return;
         const d = 18;
@@ -524,6 +600,108 @@ const useThreeDScene = (canvasRef) => {
         orbitControls.current.update();
     }, []);
 
+    const loadTemplate = useCallback((shapes, name) => {
+        // Reset camera first so the whole assembly is visible from a good angle
+        setCameraView('iso');
+
+        // Clear existing scene and groups
+        objectState.current.objects.forEach(o => { removeOutline(o); scene.current.remove(o); });
+        setObjects([]);
+        setSelected(null);
+        setSecondary(null);
+        setGroups([]);
+        if (transformControls.current) transformControls.current.detach();
+
+        // Collect mesh refs so we can group them after the last one is added
+        const addedMeshes = [];
+
+        // Add shapes one by one — each drops in from above using the existing lerp animation
+        shapes.forEach((s, i) => {
+            setTimeout(() => {
+                const m = createMesh(s.t, s.s, s.c);
+                m.material.roughness = s.rgh !== undefined ? s.rgh : 0.15;
+                m.material.metalness = s.met !== undefined ? s.met : 0;
+                m.material.opacity   = s.opa !== undefined ? s.opa : 1;
+                m.material.transparent = (s.opa !== undefined ? s.opa : 1) < 1;
+                m.position.set(s.p.x, s.p.y + 5, s.p.z); // start above target
+                m.userData.targetPos = new THREE.Vector3(s.p.x, s.p.y, s.p.z);
+                m.rotation.copy(s.r);
+                m.scale.copy(s.sc);
+                m.userData.name = s.n;
+                scene.current.add(m);
+                addedMeshes.push(m);
+                setObjects(prev => [...prev, m]);
+
+                // After the last shape lands, register all as a named group
+                if (i === shapes.length - 1 && addedMeshes.length >= 2) {
+                    setGroups([{
+                        id: THREE.MathUtils.generateUUID(),
+                        name: name || 'Template',
+                        members: new Set(addedMeshes),
+                    }]);
+                    addedMeshes.forEach(o => addOutline(o, 0xFFB800));
+                }
+            }, i * 160);
+        });
+    }, [createMesh, removeOutline, setCameraView, addOutline]);
+
+    const addTemplate = useCallback((shapes, name) => {
+        // Find the rightmost world-space X edge of whatever is already in the scene
+        let existingRightEdge = 0;
+        objectState.current.objects.forEach(obj => {
+            const tx = (obj.userData.targetPos || obj.position).x;
+            obj.geometry.computeBoundingBox();
+            const halfW = (obj.geometry.boundingBox.max.x - obj.geometry.boundingBox.min.x) / 2 * obj.scale.x;
+            existingRightEdge = Math.max(existingRightEdge, tx + halfW);
+        });
+
+        // Find the leftmost X edge of the incoming template shapes
+        let templateLeftEdge = 0;
+        shapes.forEach(s => {
+            templateLeftEdge = Math.min(templateLeftEdge, s.p.x - (s.sc.x * 0.5));
+        });
+
+        // Shift the template so its left edge starts 2.5 units past the existing right edge
+        const GAP = 2.5;
+        const xOffset = objectState.current.objects.length > 0
+            ? existingRightEdge + GAP - templateLeftEdge
+            : 0;
+
+        // Collect mesh refs so we can group them after the last one is added
+        const addedMeshes = [];
+
+        // Add shapes one by one with the same stagger drop-in — camera stays where it is
+        shapes.forEach((s, i) => {
+            setTimeout(() => {
+                const m = createMesh(s.t, s.s, s.c);
+                m.material.roughness = s.rgh !== undefined ? s.rgh : 0.15;
+                m.material.metalness = s.met !== undefined ? s.met : 0;
+                m.material.opacity   = s.opa !== undefined ? s.opa : 1;
+                m.material.transparent = (s.opa !== undefined ? s.opa : 1) < 1;
+                const tx = s.p.x + xOffset;
+                m.position.set(tx, s.p.y + 5, s.p.z);
+                m.userData.targetPos = new THREE.Vector3(tx, s.p.y, s.p.z);
+                m.rotation.copy(s.r);
+                m.scale.copy(s.sc);
+                m.userData.name = s.n;
+                scene.current.add(m);
+                addedMeshes.push(m);
+                setObjects(prev => [...prev, m]);
+
+                // After the last shape lands, register all as a named group
+                if (i === shapes.length - 1 && addedMeshes.length >= 2) {
+                    const newGroup = {
+                        id: THREE.MathUtils.generateUUID(),
+                        name: name || 'Template',
+                        members: new Set(addedMeshes),
+                    };
+                    setGroups(prev => [...prev, newGroup]);
+                    addedMeshes.forEach(o => addOutline(o, 0xFFB800));
+                }
+            }, i * 160);
+        });
+    }, [createMesh, addOutline]);
+
     const updateShapeRadius = useCallback((radius) => {
         const obj = objectState.current.selected;
         if (!obj || obj.userData.type !== 'box') return;
@@ -532,8 +710,8 @@ const useThreeDScene = (canvasRef) => {
         obj.geometry.dispose();
         obj.geometry = newGeo;
         removeOutline(obj);
-        const isLocked = objectState.current.lockedGroup.has(obj);
-        addOutline(obj, isLocked ? 0xFFB800 : 0xffffff);
+        const isInGroup = objectState.current.groups.some(g => g.members.has(obj));
+        addOutline(obj, isInGroup ? 0xFFB800 : 0xffffff);
     }, [buildGeo, removeOutline, addOutline]);
 
     const addShape = useCallback((type) => {
@@ -606,12 +784,14 @@ const useThreeDScene = (canvasRef) => {
 
     // Propagate transform in real-time to every other locked member.
     const handleObjectChange = useCallback(() => {
-        if (!selected || !lockedGroup.has(selected) || !preDragState) return;
+        if (!selected || !preDragState) return;
+        const activeGroup = objectState.current.groups.find(g => g.members.has(selected));
+        if (!activeGroup) return;
         if (currentMode === 'translate') {
             const dx = selected.position.x - preDragState.selPos.x;
             const dy = selected.position.y - preDragState.selPos.y;
             const dz = selected.position.z - preDragState.selPos.z;
-            lockedGroup.forEach(obj => {
+            activeGroup.members.forEach(obj => {
                 if (obj !== selected) {
                     obj.position.set(preDragState.members[obj.uuid].pos.x + dx, preDragState.members[obj.uuid].pos.y + dy, preDragState.members[obj.uuid].pos.z + dz);
                     obj.userData.targetPos = obj.position.clone();
@@ -621,7 +801,7 @@ const useThreeDScene = (canvasRef) => {
             const rx = selected.scale.x / preDragState.selScale.x;
             const ry = selected.scale.y / preDragState.selScale.y;
             const rz = selected.scale.z / preDragState.selScale.z;
-            lockedGroup.forEach(obj => {
+            activeGroup.members.forEach(obj => {
                 if (obj !== selected) {
                     obj.scale.set(
                         preDragState.members[obj.uuid].scale.x * rx,
@@ -631,32 +811,30 @@ const useThreeDScene = (canvasRef) => {
                 }
             });
         } else if (currentMode === 'rotate') {
-            // Compute the quaternion delta: how much the selected object has rotated from its start
             const qCurrent = new THREE.Quaternion().setFromEuler(selected.rotation);
             const qInitial = new THREE.Quaternion().setFromEuler(preDragState.selRot);
             const qDelta = qCurrent.clone().multiply(qInitial.clone().invert());
             const pivot = preDragState.selPos;
-
-            lockedGroup.forEach(obj => {
+            activeGroup.members.forEach(obj => {
                 if (obj !== selected) {
-                    // Orbit this member's position around the pivot by the same rotation delta
                     const relVec = preDragState.members[obj.uuid].pos.clone().sub(pivot);
                     relVec.applyQuaternion(qDelta);
                     obj.position.copy(pivot).add(relVec);
                     obj.userData.targetPos = obj.position.clone();
-                    // Also spin the member itself by the same delta
                     const memberQ = new THREE.Quaternion().setFromEuler(preDragState.members[obj.uuid].rot);
                     obj.quaternion.copy(qDelta).multiply(memberQ);
                 }
             });
         }
-    }, [selected, lockedGroup, preDragState, currentMode]);
+    }, [selected, preDragState, currentMode]);
 
     // Handle mouse down for drag operations (for locked groups)
     const handleMouseDown = useCallback(() => {
-        if (!selected || !lockedGroup.has(selected)) return;
+        if (!selected) return;
+        const activeGroup = objectState.current.groups.find(g => g.members.has(selected));
+        if (!activeGroup) return;
         const members = {};
-        lockedGroup.forEach(obj => {
+        activeGroup.members.forEach(obj => {
             if (obj !== selected) members[obj.uuid] = {
                 obj,
                 pos: obj.position.clone(),
@@ -670,7 +848,7 @@ const useThreeDScene = (canvasRef) => {
             selRot: selected.rotation.clone(),
             members
         });
-    }, [selected, lockedGroup, setPreDragState]);
+    }, [selected, setPreDragState]);
 
     // Handle mouse up after drag operations
     const handleMouseUp = useCallback(() => {
@@ -754,8 +932,8 @@ const useThreeDScene = (canvasRef) => {
         objectState.current.currentMode = currentMode;
     }, [currentMode]);
     useEffect(() => {
-        objectState.current.lockedGroup = lockedGroup;
-    }, [lockedGroup]);
+        objectState.current.groups = groups;
+    }, [groups]);
     useEffect(() => {
         objectState.current.placementMode = placementMode;
     }, [placementMode]);
@@ -771,7 +949,7 @@ const useThreeDScene = (canvasRef) => {
         secondary,
         hovered,
         currentMode,
-        lockedGroup,
+        groups,
         placementMode,
         undoStack,
         preDragState,
@@ -785,7 +963,9 @@ const useThreeDScene = (canvasRef) => {
         clearSecondaryObject,
         groundShape,
         lockGroup: lockGroupAction,
+        lockObjects,
         unlockAll: unlockAllAction,
+        ungroup,
         saveState,
         restoreState,
         updateMinimap, // Expose for UI to use
@@ -795,6 +975,10 @@ const useThreeDScene = (canvasRef) => {
         duplicateShape,
         setCameraView,
         updateShapeRadius,
+        renameShape,
+        renameGroup,
+        loadTemplate,
+        addTemplate,
     };
 };
 
